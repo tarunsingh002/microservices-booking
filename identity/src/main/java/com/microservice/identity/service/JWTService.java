@@ -1,0 +1,119 @@
+package com.microservice.identity.service;
+
+import com.microservice.identity.dto.ValidateTokenResponse;
+import com.microservice.identity.entity.User;
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.SignatureAlgorithm;
+import io.jsonwebtoken.io.Decoders;
+import io.jsonwebtoken.security.Keys;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.stereotype.Service;
+
+import java.security.Key;
+import java.util.Date;
+import java.util.Map;
+import java.util.function.Function;
+
+@Service
+public class JWTService {
+
+    @Autowired
+    UserService userService;
+
+    String secret = "413F4428472B4B6250655368566D5970337336763979244226452948404D6351";
+
+    public String generateToken(UserDetails userDetails, long expiration) {
+        return Jwts
+                .builder()
+                .setSubject(userDetails.getUsername())
+                .setIssuedAt(new Date(System.currentTimeMillis()))
+                .setExpiration(new Date(System.currentTimeMillis() + expiration))
+                .signWith(getSignInKey(), SignatureAlgorithm.HS256)
+                .compact();
+
+    }
+
+    public String generateRefreshToken(Map<String, Object> extraClaims, UserDetails userDetails,
+                                       long expiration) {
+        return Jwts
+                .builder()
+                .setClaims(extraClaims)
+                .setSubject(userDetails.getUsername())
+                .setIssuedAt(new Date(System.currentTimeMillis()))
+                .setExpiration(new Date(System.currentTimeMillis() + expiration))
+                .signWith(getSignInKey(), SignatureAlgorithm.HS256)
+                .compact();
+
+    }
+
+    private Key getSignInKey() {
+        byte[] key = Decoders.BASE64.decode(secret);
+        return Keys.hmacShaKeyFor(key);
+    }
+
+    private <T> T extractClaim(String token, Function<Claims, T> claimsResolver) {
+        final Claims claims = extractAllClaims(token);
+        return claimsResolver.apply(claims);
+
+    }
+
+    private Claims extractAllClaims(String token) {
+        return Jwts
+                .parserBuilder()
+                .setSigningKey(getSignInKey())
+                .build()
+                .parseClaimsJws(token)
+                .getBody();
+    }
+
+    public String extractUsername(String token) {
+        return extractClaim(token, Claims::getSubject);
+    }
+
+    public Date extractExpirationDate(String token) {
+        return extractClaim(token, Claims::getExpiration);
+    }
+
+    public boolean isTokenValid(String token, UserDetails userDetails) {
+        final String username = extractUsername(token);
+        return (username.equals(userDetails.getUsername()) && !isTokenExpired(token));
+    }
+
+    private boolean isTokenExpired(String token) {
+        return extractClaim(token, Claims::getExpiration).before(new Date());
+    }
+
+    public ValidateTokenResponse validateToken(String token){
+
+        String email;
+
+        try {
+            Jwts.parserBuilder().setSigningKey(getSignInKey()).build().parseClaimsJws(token);
+            email = extractUsername(token);
+        } catch(Exception e){
+            ValidateTokenResponse validateTokenResponse = ValidateTokenResponse.builder()
+                                                            .tokenIsValid(false)
+                                                            .email(null)
+                                                            .isAdmin(false)
+                                                            .build();
+            return validateTokenResponse;
+        }
+
+        ValidateTokenResponse validateTokenResponse = new ValidateTokenResponse();
+        validateTokenResponse.setEmail(email);
+        if (!isTokenExpired(token))
+            validateTokenResponse.setTokenIsValid(true);
+        else
+            validateTokenResponse.setTokenIsValid(false);
+
+        if (!userService.isAdmin((User) userService.loadUserByUsername(email))){
+            validateTokenResponse.setAdmin(false);
+        } else
+            validateTokenResponse.setAdmin(true);
+
+        return validateTokenResponse;
+    }
+
+}
